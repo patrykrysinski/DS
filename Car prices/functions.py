@@ -43,7 +43,7 @@ def bubble_plot(df: pd.DataFrame,
     fig = px.scatter(prices, x='Price',y='Age',size='No of ads',text=groupper, width = 800, height=400)
     fig.update_traces(textposition=text_pos)
     fig.update_layout(
-    title_text=f"Cars' {x} and {y} by {groupper}"
+    title_text=f"Cars {x} and {y} by {groupper}"
     )
     fig.show()
     return prices
