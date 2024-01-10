@@ -6,9 +6,10 @@ import numpy as np
 import lightgbm as lgb
 import matplotlib.pyplot as plt
 import pandas as pd
+import optuna
 from sklearn.metrics import r2_score, mean_absolute_percentage_error, mean_absolute_error, mean_squared_error
 
-def kaggle_download(user, dataset):
+def kaggle_download(user: str, dataset: str):
 
     """ 
     Function to load dataset from Kaggle. The Kaggle API needs to be installed and configured
@@ -25,7 +26,13 @@ def kaggle_download(user, dataset):
         zf.extractall() 
         zf.close()
 
-def bubble_plot(df,x,y,ids_col,groupper,list_to_change_location,agg_func = np.mean) -> pd.DataFrame:
+def bubble_plot(df: pd.DataFrame,
+                x: str,
+                y: str,
+                ids_col: str,
+                groupper: str,
+                list_to_change_location: list[str],
+                agg_func: callable = np.mean) -> pd.DataFrame:
     """
     Function to group data by groupper and calculate aggregate function for x and y as well as number of record in each group.
     Then scatter / bubble plot is made on aggregated data 
@@ -33,8 +40,8 @@ def bubble_plot(df,x,y,ids_col,groupper,list_to_change_location,agg_func = np.me
     prices = df.groupby(groupper).agg({y:agg_func,x: agg_func ,ids_col: np.size}).rename({ids_col: 'No of ads'},axis=1).reset_index()
     prices['Age'] = np.round(prices['Age'])
     print(prices)
-    text_pos = ['bottom center' if i in list_to_change_location  else 'top center' for i in prices[groupper] ]
-    fig = px.scatter(prices, x='Price',y='Age',size='No of ads',text=groupper)
+    text_pos = ['bottom center' if i in list_to_change_location  else 'top center' for i in prices[groupper].values ]
+    fig = px.scatter(prices, x='Price',y='Age',size='No of ads',text=groupper, width = 800, height=400)
     fig.update_traces(textposition=text_pos)
     fig.update_layout(
     title_text=f"Cars' {x} and {y} by {groupper}"
@@ -42,23 +49,61 @@ def bubble_plot(df,x,y,ids_col,groupper,list_to_change_location,agg_func = np.me
     fig.show()
     return prices
     
-def barplot_share(df, column):
+def barplot_share(df: pd.DataFrame, column: str) -> px.bar:
+
+    """
+    Function to create bar plot with count share
+
+    Args:
+    
+    df: Data frame to create plot
+    column: column to group and count
+    """
+    
     agg_df = df.groupby(column).count().reset_index().iloc[:,:2]
     agg_df.columns = [column,'number']
     agg_df['share'] =  np.round(agg_df['number']/ agg_df['number'].sum(),3)
     agg_df = agg_df.sort_values(by='share', ascending = False)
-    return px.bar(data_frame=agg_df, x=column,y='share',title=f"Share by {column}" )
+    return px.bar(data_frame=agg_df, x=column,y='share',title=f"Share by {column}", width = 600, height=400 )
 
-def remove_space(df):
+def remove_space(df: pd.DataFrame) -> pd.DataFrame:
+
+    """
+    Function to remove spaces in columns names
+    
+    Args:
+    
+    df: Data frame to remove spaces
+    """
+    
     data_cols_old = df.columns
     data_cols_new  = [i.replace(' ','_') for i in data_cols_old]
     to_change = dict(map(lambda i,j : (i,j) , data_cols_old,data_cols_new))
     data = df.rename(to_change, axis=1)
     return data
 
-def encoding(df,cols_to_one_hot, cols_to_avg,y='Price'):
-    df = pd.get_dummies(data=df, columns=cols_to_one_hot, drop_first=True)
+def encoding(df : pd.DataFrame,
+             cols_to_one_hot: list[str], 
+             cols_to_avg : list[str],
+             y: str='Price') -> pd.DataFrame:
+    
+    """
+    Function to create one hot and average based encoding
+
+    Args:
+    df: Data frame to take features from 
+    cols_to_one_hot: list of columns to one hot encoding
+    cols_to_avg: list of columns to average based label encoding
+    """
+
+    try:
+        df = pd.get_dummies(data=df, columns=cols_to_one_hot, drop_first=True)
+    except KeyError:
+        print("The list of variables to one hot encoding is not correct")
+    
     for i in cols_to_avg:
+        if i not in df.columns:
+            raise KeyError(f"{i} not in data frame columns")
         encoding = df[[y,i]].groupby(i).mean().sort_values(by=y).reset_index()
         encoding[f'{i}_encoded'] = np.arange(0,encoding.shape[0])
         del encoding[y]
@@ -66,7 +111,28 @@ def encoding(df,cols_to_one_hot, cols_to_avg,y='Price'):
     return df
 
 
-def objective(trial, train_x, train_y,obj,seed,numerical_features,cat_features,fold_no = 3):
+def objective(trial: optuna.trial, 
+              train_x : pd.DataFrame, 
+              train_y : pd.DataFrame,
+              obj: str,
+              seed: int,
+              numerical_features: list[str],
+              cat_features : list[str],
+              fold_no: int = 3) -> float:
+    
+    """
+    Objective function for optuna package to optizmize lightgbm model
+
+    Args:
+    trial: Variable to conduct optuna trial
+    train_x : Data frame included train X's to the model
+    train_y : Data frame included train y to the model,
+    obj: evaluation metric,
+    seed: random seed,
+    numerical_features: list of numerical features to the model,
+    cat_features : list of categorical features to the model,
+    fold_no: number of folds in the model.
+    """
     hyperparams = {'objective':trial.suggest_categorical('objective',['regression','regression_l1']),
                     'boosting': trial.suggest_categorical('boosting',['gbdt','dart']),
                     'learning_rate' : trial.suggest_float('learning_rate',0.05,0.8),
@@ -98,19 +164,28 @@ def objective(trial, train_x, train_y,obj,seed,numerical_features,cat_features,f
                    #num_boost_round=num_iterations,
                    seed =seed,
                    nfold=fold_no,
-                   metrics=obj
+                   metrics=obj,
+                  
     )
     
     return model[f'valid {obj}-mean'][hyperparams['num_iterations']-1]
 
-def evaluation(pred_train, train_y, pred_test, test_y):
+def evaluation(pred_train: list, train_y: list, pred_test: list, test_y: list):
+
     """
     Function to create evaluation summary with the following metrics:
     - r2
     - mean absolute error (mae)
     - mean absolute percentage error (mape)
     - root mean squared error (rmse) 
+
+    Args:
+    pred_train: list of prediction of train set
+    train_y: list of actual values for y of train set
+    pred_test: list of prediction of test set
+    test_y: list of actual values for y of test set
     """
+
     r2_train = r2_score(train_y, pred_train)
     r2_test = r2_score(test_y, pred_test)
     mae_train = mean_absolute_error(train_y, pred_train)
@@ -137,28 +212,67 @@ def evaluation(pred_train, train_y, pred_test, test_y):
     plt.show()
 
 
-def calc_split_summary(df,all_features, calc_type = np.mean, y='Price',x = 'Ad ID'):
+def calc_split_summary(df: pd.DataFrame,
+                       all_features : list[str], 
+                       calc_type :callable = np.mean, 
+                       y: str='Price',
+                       x: str = 'Ad ID') -> pd.DataFrame:
+    
+    """
+    Function to calculate summary of listed 0/1 variables and percentage difference in y between 0 and 1. 
+    It returns dataframe with the results.
+
+    Args:
+
+    df: Data frame to aggregate
+    all_features: list of features to calculate summary
+    calc_type: numpy aggregate function to measure differences
+    y: target variable from which aggregated measure will be calculated
+    x: ID in the data frame
+    """
+    if y not in df.columns:
+        raise KeyError(f'{y} not in dataframe columns')
+    elif x not in df.columns:
+        raise KeyError(f'{x} not in dataframe columns')
+    
     all_diff = []
     min_no_of_rec = []
     for feat in all_features:
+        if feat not in df.columns:
+            raise KeyError(f'{feat} not in dataframe columns')
+        
         agg = df[[feat,y,x]].groupby(feat).agg({y:calc_type, x:np.size}).rename({x: 'no of records'}, axis=1)
         min_no_of_rec.append(agg['no of records'].min())
         diff = round(agg.loc[1,y] / agg.loc[0,y] * 100)
         all_diff.append(diff)
-        print(agg)
-        print(f" Difference between value 1 and 0 equals to: {diff}%")
-        print('##############\n')
+        agg[f'difference in {y}'] = diff 
+    results = pd.DataFrame(columns=[f'difference in {y}','number_of_records - min' ], index=all_features)
+    results[f'difference in {y}']= all_diff
+    results['number_of_records - min'] = min_no_of_rec
+    return results.sort_values(by=f'difference in {y}')
 
-def info_splitter(df, column_to_split,split = ','):
-    values_df = df[column_to_split].str.split(split, expand=True)
-    all_features = []
-    all_features = list(set(values_df.values.flatten().tolist()))
-    all_features.remove(None)
-    for feat in all_features:
-        df.loc[df['Car Features'].str.contains(feat),feat] = 1
-    df = df.fillna(0)
-    all
-    return df, all_features
+def info_splitter(df: pd.DataFrame, column_to_split = str,split: str = ',') -> tuple[pd.DataFrame,list[str]]:
 
-### study.optimize(lambda trial: objective(trial,...))
-### lgb_params = {**study.best_params, ...}
+    """
+    Function to split information stored in one columns to have each in separated variable 
+    
+    Args:
+
+    df: Data frame used to split information
+    column_to_split: column in which information are stored
+    split: separator which split information in column_to_split
+    
+    """
+
+    if column_to_split in df.columns:
+        values_df = df[column_to_split].str.split(split, expand=True)
+        all_features = []
+        all_features = list(set(values_df.values.flatten().tolist()))
+        all_features.remove(None)
+        for feat in all_features:
+            df.loc[df['Car Features'].str.contains(feat),feat] = 1
+        df = df.fillna(0)
+        all
+        return df, all_features
+    else:
+        raise KeyError(f"{column_to_split} is not a column in given data frame")
