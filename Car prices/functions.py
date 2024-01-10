@@ -39,7 +39,6 @@ def bubble_plot(df: pd.DataFrame,
     """
     prices = df.groupby(groupper).agg({y:agg_func,x: agg_func ,ids_col: np.size}).rename({ids_col: 'No of ads'},axis=1).reset_index()
     prices['Age'] = np.round(prices['Age'])
-    print(prices)
     text_pos = ['bottom center' if i in list_to_change_location  else 'top center' for i in prices[groupper].values ]
     fig = px.scatter(prices, x='Price',y='Age',size='No of ads',text=groupper, width = 800, height=400)
     fig.update_traces(textposition=text_pos)
