@@ -1,0 +1,12 @@
+# Project dependencies
+# Note: `os` is part of the Python standard library and should NOT be listed here.
+
+langchain==1.0.2
+langchain-openai
+pandas
+python-dotenv
+requests
+matplotlib
+
+# Add pinned versions if you need reproducible installs, e.g.:
+# pandas==2.2.2
